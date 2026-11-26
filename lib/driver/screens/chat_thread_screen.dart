@@ -4,9 +4,9 @@ import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/app_colors.dart';
-import '../../services/app_state.dart';
+import '../../viewmodels/chat_view_model.dart';
 
-/// Single passenger conversation (WhatsApp-style thread).
+/// Single ride conversation (API-backed).
 class DriverChatThreadScreen extends StatefulWidget {
   final String threadId;
   const DriverChatThreadScreen({super.key, required this.threadId});
@@ -18,58 +18,77 @@ class DriverChatThreadScreen extends StatefulWidget {
 class _DriverChatThreadScreenState extends State<DriverChatThreadScreen> {
   final _input = TextEditingController();
   final _scroll = ScrollController();
+  bool _sending = false;
+  ChatViewModel? _chat;
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
-      context.read<AppState>().markThreadRead(widget.threadId);
+      _chat = context.read<ChatViewModel>();
+      _chat!.setOpenThread(widget.threadId);
+      await _chat!.openThread(widget.threadId);
+      _scrollToEnd();
     });
   }
 
   @override
   void dispose() {
+    _chat?.setOpenThread(null);
     _input.dispose();
     _scroll.dispose();
     super.dispose();
   }
 
-  void _send(AppState state) {
-    final text = _input.text;
-    if (text.trim().isEmpty) return;
-    state.sendChatMessage(widget.threadId, text);
-    _input.clear();
+  void _scrollToEnd() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scroll.hasClients) {
-        _scroll.animateTo(
-          _scroll.position.maxScrollExtent + 80,
-          duration: const Duration(milliseconds: 220),
-          curve: Curves.easeOut,
-        );
-      }
+      if (!_scroll.hasClients) return;
+      _scroll.animateTo(
+        _scroll.position.maxScrollExtent + 80,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOut,
+      );
     });
+  }
+
+  Future<void> _send(ChatViewModel chat) async {
+    final text = _input.text;
+    if (text.trim().isEmpty || _sending) return;
+    setState(() => _sending = true);
+    final err = await chat.send(widget.threadId, text);
+    if (!mounted) return;
+    setState(() => _sending = false);
+    if (err != null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err)));
+      return;
+    }
+    _input.clear();
+    _scrollToEnd();
   }
 
   @override
   Widget build(BuildContext context) {
-    final state = context.watch<AppState>();
-    final thread = state.chatThreadById(widget.threadId);
+    final chat = context.watch<ChatViewModel>();
+    final thread = chat.threadById(widget.threadId);
 
-    if (thread == null) {
+                if (thread == null) {
       return Scaffold(
         appBar: AppBar(title: const Text('Chat')),
         body: Center(
-          child: FilledButton(
-            onPressed: () {
-              if (context.canPop()) {
-                context.pop();
-              } else {
-                context.go('/driver/messages');
-              }
-            },
-            child: const Text('Back to chats'),
-          ),
+          child: chat.isLoading
+              ? const CircularProgressIndicator()
+              : FilledButton(
+                  onPressed: () {
+                    if (context.canPop()) {
+                      context.pop();
+                    } else {
+                      final loc = GoRouterState.of(context).uri.toString();
+                      context.go(loc.startsWith('/passenger') ? '/passenger' : '/driver/messages');
+                    }
+                  },
+                  child: const Text('Back'),
+                ),
         ),
       );
     }
@@ -83,10 +102,12 @@ class _DriverChatThreadScreenState extends State<DriverChatThreadScreen> {
         leading: IconButton(
           icon: const Icon(CupertinoIcons.back),
           onPressed: () {
+            chat.setOpenThread(null);
             if (context.canPop()) {
               context.pop();
             } else {
-              context.go('/driver/messages');
+              final loc = GoRouterState.of(context).uri.toString();
+              context.go(loc.startsWith('/passenger') ? '/passenger/tracking' : '/driver/messages');
             }
           },
         ),
@@ -104,11 +125,10 @@ class _DriverChatThreadScreenState extends State<DriverChatThreadScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(thread.passengerName, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
-                  if (thread.rideId != null)
-                    Text(
-                      'Ride ${thread.rideId}',
-                      style: const TextStyle(fontSize: 11, color: PassengerPalette.muted, fontWeight: FontWeight.w500),
-                    ),
+                  const Text(
+                    'Ride chat',
+                    style: TextStyle(fontSize: 11, color: PassengerPalette.muted, fontWeight: FontWeight.w500),
+                  ),
                 ],
               ),
             ),
@@ -179,7 +199,7 @@ class _DriverChatThreadScreenState extends State<DriverChatThreadScreen> {
                         placeholder: 'Message',
                         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                         decoration: const BoxDecoration(),
-                        onSubmitted: (_) => _send(state),
+                        onSubmitted: (_) => _send(chat),
                       ),
                     ),
                   ),
@@ -189,11 +209,16 @@ class _DriverChatThreadScreenState extends State<DriverChatThreadScreen> {
                     shape: const CircleBorder(),
                     child: InkWell(
                       customBorder: const CircleBorder(),
-                      onTap: () => _send(state),
-                      child: const SizedBox(
+                      onTap: _sending ? null : () => _send(chat),
+                      child: SizedBox(
                         width: 44,
                         height: 44,
-                        child: Icon(CupertinoIcons.paperplane_fill, color: Colors.white, size: 18),
+                        child: _sending
+                            ? const Padding(
+                                padding: EdgeInsets.all(12),
+                                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                              )
+                            : const Icon(CupertinoIcons.paperplane_fill, color: Colors.white, size: 18),
                       ),
                     ),
                   ),

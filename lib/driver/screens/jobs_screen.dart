@@ -8,6 +8,8 @@ import '../../services/app_state.dart';
 import '../../services/mock_repository.dart';
 import '../../shared/models/models.dart';
 import '../../shared/widgets/map_placeholder.dart';
+import '../../viewmodels/chat_view_model.dart';
+import '../../viewmodels/ride_view_model.dart';
 
 /// Driver home — one offered ride at a time, then active trip until complete.
 class DriverJobsScreen extends StatefulWidget {
@@ -21,9 +23,12 @@ class _DriverJobsScreenState extends State<DriverJobsScreen> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
       context.read<AppState>().ensureDriverReceivingOffers();
+      final err = await context.read<RideViewModel>().startDriverSession();
+      if (!mounted || err == null) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err)));
     });
   }
 
@@ -207,7 +212,8 @@ class _DriverJobsScreenState extends State<DriverJobsScreen> {
                         );
                         return;
                       }
-                      state.refreshJobs();
+                      // ignore: unawaited_futures
+                      context.read<RideViewModel>().startDriverSession();
                     },
                   ),
                 ),
@@ -235,26 +241,35 @@ class _DriverJobsScreenState extends State<DriverJobsScreen> {
                 trip: trip,
                 onComplete: () => context.go('/driver/tracking'),
                 onChat: () {
-                  final threads = state.chatThreads.where((t) => t.passengerName == trip.passengerName);
-                  if (threads.isNotEmpty) {
-                    context.push('/driver/chat/${threads.first.id}');
-                  } else {
-                    context.go('/driver/messages');
-                  }
+                  context.read<ChatViewModel>().ensureThreadShell(
+                    trip.id,
+                    peerName: trip.passengerName,
+                  );
+                  context.push('/driver/chat/${trip.id}');
                 },
               )
             else if (offer != null)
               _OfferCard(
                 job: offer,
-                onAccept: () {
-                  state.acceptJob(offer.id);
+                onAccept: () async {
+                  final err = await context.read<RideViewModel>().acceptOffer(offer.id);
+                  if (!context.mounted) return;
+                  if (err != null) {
+                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err)));
+                    return;
+                  }
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(content: Text('Accepted · ${offer.passengerName} — navigating to pickup')),
                   );
                   context.go('/driver/tracking');
                 },
-                onReject: () {
-                  state.rejectJob(offer.id);
+                onReject: () async {
+                  final err = await context.read<RideViewModel>().rejectOffer(offer.id);
+                  if (!context.mounted) return;
+                  if (err != null) {
+                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err)));
+                    return;
+                  }
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(content: Text('Rejected — waiting for next offer')),
                   );

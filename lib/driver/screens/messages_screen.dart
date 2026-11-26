@@ -3,18 +3,31 @@ import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/app_colors.dart';
-import '../../services/app_state.dart';
 import '../../shared/models/models.dart';
 import '../../shared/widgets/confirm_bottom_sheet.dart';
+import '../../viewmodels/chat_view_model.dart';
 
-/// WhatsApp-style conversation list for the driver.
-class DriverMessagesScreen extends StatelessWidget {
+/// WhatsApp-style conversation list for the driver (API ride chats).
+class DriverMessagesScreen extends StatefulWidget {
   const DriverMessagesScreen({super.key});
 
   @override
+  State<DriverMessagesScreen> createState() => _DriverMessagesScreenState();
+}
+
+class _DriverMessagesScreenState extends State<DriverMessagesScreen> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      context.read<ChatViewModel>().refreshThreads();
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final state = context.watch<AppState>();
-    final threads = state.chatThreads;
+    final chat = context.watch<ChatViewModel>();
+    final threads = chat.threads;
 
     return ColoredBox(
       color: Colors.white,
@@ -33,7 +46,7 @@ class DriverMessagesScreen extends StatelessWidget {
                       style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800, letterSpacing: -0.4),
                     ),
                   ),
-                  if (state.unreadMessages > 0)
+                  if (chat.unreadCount > 0)
                     TextButton(
                       onPressed: () async {
                         final ok = await showConfirmBottomSheet(
@@ -43,7 +56,7 @@ class DriverMessagesScreen extends StatelessWidget {
                           cancelLabel: 'Keep',
                           confirmLabel: 'Mark all read',
                           isDestructive: false,
-                          onConfirm: () async => state.clearMessages(),
+                          onConfirm: () async => chat.markAllRead(),
                         );
                         if (ok && context.mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
@@ -53,23 +66,34 @@ class DriverMessagesScreen extends StatelessWidget {
                       },
                       child: const Text('Mark all read'),
                     ),
+                  IconButton(
+                    onPressed: chat.isLoading ? null : () => chat.refreshThreads(),
+                    icon: chat.isLoading
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.refresh),
+                  ),
                 ],
               ),
             ),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: Text(
-                'Ride conversations stay separate per passenger',
+                'Messages sync with your active and recent rides',
                 style: TextStyle(color: PassengerPalette.muted.withValues(alpha: 0.95), fontSize: 13),
               ),
             ),
             const SizedBox(height: 8),
             Expanded(
               child: threads.isEmpty
-                  ? const Center(
+                  ? Center(
                       child: Text(
-                        'No conversations yet',
-                        style: TextStyle(color: PassengerPalette.muted, fontWeight: FontWeight.w600),
+                        chat.error ?? 'No conversations yet — accept a ride to chat',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(color: PassengerPalette.muted, fontWeight: FontWeight.w600),
                       ),
                     )
                   : ListView.separated(
@@ -80,10 +104,7 @@ class DriverMessagesScreen extends StatelessWidget {
                         final t = threads[i];
                         return _ThreadTile(
                           thread: t,
-                          onTap: () {
-                            state.markThreadRead(t.id);
-                            context.push('/driver/chat/${t.id}');
-                          },
+                          onTap: () => context.go('/driver/chat/${t.id}'),
                         );
                       },
                     ),
@@ -104,83 +125,62 @@ class _ThreadTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final initial = thread.passengerName.isNotEmpty ? thread.passengerName[0].toUpperCase() : '?';
-    final unread = thread.unread > 0;
-
-    return InkWell(
+    return ListTile(
       onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        child: Row(
-          children: [
-            CircleAvatar(
-              radius: 26,
-              backgroundColor: PassengerPalette.lime.withValues(alpha: 0.35),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
+      leading: CircleAvatar(
+        radius: 26,
+        backgroundColor: PassengerPalette.lime.withValues(alpha: 0.35),
+        child: Text(initial, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 18)),
+      ),
+      title: Row(
+        children: [
+          Expanded(
+            child: Text(
+              thread.passengerName,
+              style: TextStyle(
+                fontWeight: thread.unread > 0 ? FontWeight.w800 : FontWeight.w700,
+                fontSize: 16,
+              ),
+            ),
+          ),
+          Text(
+            thread.time,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: thread.unread > 0 ? PassengerPalette.limeDeep : PassengerPalette.muted,
+            ),
+          ),
+        ],
+      ),
+      subtitle: Row(
+        children: [
+          Expanded(
+            child: Text(
+              thread.lastMessage,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: thread.unread > 0 ? const Color(0xFF111827) : PassengerPalette.muted,
+                fontWeight: thread.unread > 0 ? FontWeight.w600 : FontWeight.w500,
+              ),
+            ),
+          ),
+          if (thread.unread > 0)
+            Container(
+              margin: const EdgeInsets.only(left: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+              decoration: BoxDecoration(
+                color: PassengerPalette.limeDeep,
+                borderRadius: BorderRadius.circular(10),
+              ),
               child: Text(
-                initial,
-                style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 18, color: PassengerPalette.ink),
+                '${thread.unread}',
+                style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w800),
               ),
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          thread.passengerName,
-                          style: TextStyle(
-                            fontWeight: unread ? FontWeight.w800 : FontWeight.w700,
-                            fontSize: 16,
-                          ),
-                        ),
-                      ),
-                      Text(
-                        thread.time,
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: unread ? PassengerPalette.limeDeep : PassengerPalette.muted,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 3),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          thread.lastMessage,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: unread ? FontWeight.w600 : FontWeight.w500,
-                            color: unread ? PassengerPalette.ink : PassengerPalette.muted,
-                          ),
-                        ),
-                      ),
-                      if (unread)
-                        Container(
-                          margin: const EdgeInsets.only(left: 8),
-                          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: PassengerPalette.limeDeep,
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                          child: Text(
-                            '${thread.unread}',
-                            style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w800),
-                          ),
-                        ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
+        ],
       ),
     );
   }

@@ -5,11 +5,12 @@ import 'package:provider/provider.dart';
 
 import '../core/app_colors.dart';
 import '../core/auth_theme.dart';
+import '../core/utils/validators.dart';
 import '../services/app_state.dart';
 import '../shared/models/models.dart';
 import '../shared/widgets/brand_logo.dart';
+import '../viewmodels/auth_view_model.dart';
 
-/// Role-aware Sign In (Passenger or Driver from welcome selection).
 class AuthSignInScreen extends StatefulWidget {
   const AuthSignInScreen({super.key});
 
@@ -20,9 +21,8 @@ class AuthSignInScreen extends StatefulWidget {
 class _AuthSignInScreenState extends State<AuthSignInScreen> {
   final _email = TextEditingController();
   final _password = TextEditingController();
+  final _formKey = GlobalKey<FormState>();
   bool _obscure = true;
-  bool _loading = false;
-  String? _error;
 
   @override
   void dispose() {
@@ -32,39 +32,43 @@ class _AuthSignInScreenState extends State<AuthSignInScreen> {
   }
 
   Future<void> _submit() async {
-    final state = context.read<AppState>();
-    final role = state.pendingRole ?? UserRole.passenger;
-    state.selectRole(role);
+    if (!(_formKey.currentState?.validate() ?? false)) return;
+    final auth = context.read<AuthViewModel>();
+    final app = context.read<AppState>();
 
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
-    await Future<void>.delayed(const Duration(milliseconds: 350));
-
-    final err = await state.signIn(
-      email: _email.text,
-      password: _password.text,
-    );
-
+    final err = await auth.login(email: _email.text, password: _password.text);
     if (!mounted) return;
-    setState(() {
-      _loading = false;
-      _error = err;
-    });
+    if (err != null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err)));
+      return;
+    }
 
-    if (err == null) {
-      if (state.isPassenger) {
-        context.go('/passenger');
-      } else {
-        context.go(state.driverDocumentsComplete ? '/driver' : '/driver/documents');
-      }
+    final u = auth.user!;
+    final role = auth.sessionRole ?? UserRole.passenger;
+    await app.syncFromApiAuth(
+      id: u.id,
+      name: u.name,
+      email: u.email,
+      phone: u.phone,
+      role: role,
+      vehicle: u.driver?.vehicleMakeModel,
+      vehiclePlate: u.driver?.vehiclePlate,
+      operatingZone: u.driver?.operatingZone,
+      documentsComplete: role == UserRole.passenger,
+    );
+    if (!mounted) return;
+
+    if (auth.isPassengerMode) {
+      context.go('/passenger');
+    } else {
+      context.go(app.driverDocumentsComplete ? '/driver' : '/driver/documents');
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final role = context.watch<AppState>().pendingRole ?? UserRole.passenger;
+    final auth = context.watch<AuthViewModel>();
+    final role = auth.pendingRole;
     final roleLabel = role == UserRole.passenger ? 'Passenger' : 'Driver';
     final signupPath =
         role == UserRole.driver ? '/auth/signup/driver' : '/auth/signup/passenger';
@@ -85,87 +89,89 @@ class _AuthSignInScreenState extends State<AuthSignInScreen> {
         child: Center(
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 440),
-            child: ListView(
-              padding: const EdgeInsets.fromLTRB(24, 8, 24, 28),
-              children: [
-                const BrandLogo(size: 72),
-                const SizedBox(height: 12),
-                Text(
-                  'Sign In as $roleLabel',
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.w800,
-                    color: AuthTheme.ink,
+            child: Form(
+              key: _formKey,
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(24, 8, 24, 28),
+                children: [
+                  const BrandLogo(size: 72),
+                  const SizedBox(height: 12),
+                  Text(
+                    'Sign In as $roleLabel',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.w800,
+                      color: AuthTheme.ink,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 6),
-                const Text(
-                  'Enter your email and password',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: PassengerPalette.muted),
-                ),
-                const SizedBox(height: 22),
-                const Text('Email Address', style: AuthTheme.labelStyle),
-                const SizedBox(height: 6),
-                TextField(
-                  controller: _email,
-                  keyboardType: TextInputType.emailAddress,
-                  decoration: AuthTheme.fieldDecoration(
-                    hint: 'you@email.com',
-                    icon: CupertinoIcons.mail,
+                  const SizedBox(height: 6),
+                  const Text(
+                    'Enter your email and password',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: PassengerPalette.muted),
                   ),
-                ),
-                const SizedBox(height: 14),
-                const Text('Password', style: AuthTheme.labelStyle),
-                const SizedBox(height: 6),
-                TextField(
-                  controller: _password,
-                  obscureText: _obscure,
-                  decoration: AuthTheme.fieldDecoration(
-                    hint: 'Enter password',
-                    icon: CupertinoIcons.lock,
-                    suffix: IconButton(
-                      onPressed: () => setState(() => _obscure = !_obscure),
-                      icon: Icon(
-                        _obscure ? CupertinoIcons.eye_slash : CupertinoIcons.eye,
-                        color: AuthTheme.muted,
-                        size: 20,
+                  const SizedBox(height: 22),
+                  const Text('Email Address', style: AuthTheme.labelStyle),
+                  const SizedBox(height: 6),
+                  TextFormField(
+                    controller: _email,
+                    keyboardType: TextInputType.emailAddress,
+                    validator: Validators.email,
+                    decoration: AuthTheme.fieldDecoration(
+                      hint: 'you@email.com',
+                      icon: CupertinoIcons.mail,
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  const Text('Password', style: AuthTheme.labelStyle),
+                  const SizedBox(height: 6),
+                  TextFormField(
+                    controller: _password,
+                    obscureText: _obscure,
+                    validator: (v) =>
+                        (v == null || v.isEmpty) ? 'Enter your password.' : null,
+                    decoration: AuthTheme.fieldDecoration(
+                      hint: 'Enter password',
+                      icon: CupertinoIcons.lock,
+                      suffix: IconButton(
+                        onPressed: () => setState(() => _obscure = !_obscure),
+                        icon: Icon(
+                          _obscure ? CupertinoIcons.eye_slash : CupertinoIcons.eye,
+                          color: AuthTheme.muted,
+                          size: 20,
+                        ),
                       ),
                     ),
                   ),
-                ),
-                if (_error != null) ...[
-                  const SizedBox(height: 12),
-                  Text(_error!, style: const TextStyle(color: AppPalette.danger)),
+                  const SizedBox(height: 22),
+                  SizedBox(
+                    height: 54,
+                    child: FilledButton(
+                      onPressed: auth.isLoading ? null : _submit,
+                      style: AuthTheme.primaryButton(),
+                      child: auth.isLoading
+                          ? const SizedBox(
+                              width: 22,
+                              height: 22,
+                              child: CircularProgressIndicator(strokeWidth: 2.4, color: Colors.black),
+                            )
+                          : const Text('Sign In', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  TextButton(
+                    onPressed: () {
+                      auth.selectRole(role);
+                      context.go(signupPath);
+                    },
+                    child: const Text(
+                      'Need an account? Sign Up',
+                      style: TextStyle(color: AuthTheme.gold, fontWeight: FontWeight.w700),
+                    ),
+                  ),
                 ],
-                const SizedBox(height: 22),
-                SizedBox(
-                  height: 54,
-                  child: FilledButton(
-                    onPressed: _loading ? null : _submit,
-                    style: AuthTheme.primaryButton(),
-                    child: _loading
-                        ? const SizedBox(
-                            width: 22,
-                            height: 22,
-                            child: CircularProgressIndicator(strokeWidth: 2.4, color: Colors.black),
-                          )
-                        : const Text('Sign In', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
-                  ),
-                ),
-                const SizedBox(height: 8),
-                TextButton(
-                  onPressed: () {
-                    context.read<AppState>().selectRole(role);
-                    context.go(signupPath);
-                  },
-                  child: Text(
-                    'Need an account? Sign Up',
-                    style: const TextStyle(color: AuthTheme.gold, fontWeight: FontWeight.w700),
-                  ),
-                ),
-              ],
+              ),
             ),
           ),
         ),

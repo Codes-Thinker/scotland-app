@@ -112,7 +112,7 @@ class AppState extends ChangeNotifier {
       status: DriverDocStatus.missing,
     ),
     DriverDocument(
-      id: 'v5',
+      id: 'v5c',
       title: 'Vehicle Registration Document',
       hint: 'V5C / logbook photo',
       status: DriverDocStatus.missing,
@@ -138,35 +138,62 @@ class AppState extends ChangeNotifier {
   /// Whether a local account already exists for [email] (post-signup login).
   bool hasAccount(String email) => _accounts.containsKey(email.trim().toLowerCase());
 
-  /// Restore last login — once signed in, stay signed in across restarts.
+  /// Legacy local restore — prefer [syncFromApiAuth] after AuthViewModel.restoreSession.
   Future<void> restoreSession() async {
-    final data = await SessionStore.read();
-    final email = data?['email'] as String?;
-    if (data != null && email != null && email.isNotEmpty) {
-      final roleName = '${data['role'] ?? 'passenger'}';
-      final role = roleName == 'driver' ? UserRole.driver : UserRole.passenger;
-      final docsComplete = data['docs'] == true || role == UserRole.passenger;
-      final user = AppUser(
-        id: '${data['id'] ?? 'u-restored'}',
-        name: '${data['name'] ?? email.split('@').first}',
-        email: email,
-        phone: '${data['phone'] ?? '+44 7000 000000'}',
-        role: role,
-        vehicle: data['vehicle'] as String?,
-        licenceNumber: data['licence'] as String?,
-      );
-      final existing = _accounts[email.toLowerCase()];
-      _accounts[email.toLowerCase()] = _LocalAccount(
-        password: existing?.password ?? 'demo',
-        user: user,
-        documentsComplete: docsComplete,
-      );
-      await _activateUser(
-        user,
-        forceDocsIncomplete: role == UserRole.driver && !docsComplete,
-        persist: false,
-      );
-    }
+    _sessionReady = true;
+    notifyListeners();
+  }
+
+  /// Bind UI/session state from the real API auth user (MVVM AuthViewModel).
+  Future<void> syncFromApiAuth({
+    required String id,
+    required String name,
+    required String email,
+    required String phone,
+    required UserRole role,
+    String? vehicle,
+    String? vehiclePlate,
+    String? operatingZone,
+    String? licenceNumber,
+    bool documentsComplete = false,
+  }) async {
+    final user = AppUser(
+      id: id,
+      name: name,
+      email: email,
+      phone: phone,
+      role: role,
+      vehicle: vehicle,
+      vehiclePlate: vehiclePlate,
+      operatingZone: operatingZone,
+      licenceNumber: licenceNumber,
+    );
+    _pendingRole = role;
+    _accounts[email.toLowerCase()] = _LocalAccount(
+      password: 'api',
+      user: user,
+      documentsComplete: role == UserRole.passenger ? true : documentsComplete,
+    );
+    await _activateUser(
+      user,
+      forceDocsIncomplete: role == UserRole.driver && !documentsComplete,
+      persist: false,
+    );
+    _sessionReady = true;
+    notifyListeners();
+  }
+
+  Future<void> clearApiSession() async {
+    _stopRideTicker();
+    _activeRide = null;
+    _user = null;
+    _online = DriverOnlineStatus.offline;
+    _rideBooked = false;
+    _tracking = false;
+    _searching = false;
+    _driverMatched = false;
+    _ridePhase = PassengerRidePhase.idle;
+    _driverDocs = const [];
     _sessionReady = true;
     notifyListeners();
   }
@@ -226,7 +253,8 @@ class AppState extends ChangeNotifier {
   ActiveRide? get activeRide => _activeRide;
   bool get requestAccepted => _activeTrip != null;
   int get unreadMessages => _chatThreads.fold(0, (s, t) => s + t.unread);
-  int get alerts => _alerts + _liveAlerts.length;
+  int get alerts =>
+      _apiAlerts.isNotEmpty ? _apiAlerts.length : (_alerts + _liveAlerts.length);
   int get retainedClients => _retainedClients;
   Set<String> get blocked => _blocked;
   double get lastRating => _lastRating;
@@ -235,16 +263,22 @@ class AppState extends ChangeNotifier {
   List<RideRecord> get passengerTrips => [..._completedPassengerTrips, ...MockRepository.passengerTrips];
   List<RideRecord> get scheduledRides => [..._extraScheduled, ...MockRepository.scheduledRides];
   List<RideRecord> get driverScheduledRides => List.unmodifiable(_driverScheduled);
-  List<String> get passengerAlerts => [..._liveAlerts, ...MockRepository.passengerAlerts];
+  List<String> get passengerAlerts =>
+      _apiAlerts.isNotEmpty ? List.unmodifiable(_apiAlerts) : List.unmodifiable(_liveAlerts);
   List<(String, String)> get supportTopics => MockRepository.supportTopics;
   List<RideRecord> get driverTrips => [..._completedDriverTrips, ...MockRepository.driverTrips];
   List<String> get clients => MockRepository.clientNames;
   List<ChatMessage> get messages => MockRepository.messages;
   List<ChatThread> get chatThreads => List.unmodifiable(_chatThreads);
-  List<String> get alertItems => [..._liveAlerts, ...MockRepository.driverAlerts];
+  List<String> get alertItems =>
+      _apiAlerts.isNotEmpty ? List.unmodifiable(_apiAlerts) : List.unmodifiable(_liveAlerts);
   List<DriverDocument> get driverDocuments => List.unmodifiable(_driverDocs);
 
-  final List<ChatThread> _chatThreads = List<ChatThread>.from(MockRepository.chatThreads);
+  final List<ChatThread> _chatThreads = [];
+  final List<String> _apiAlerts = [];
+  double? _apiTodayEarnings;
+  double? _apiWeekEarnings;
+  int? _apiCompletedTrips;
 
   bool get driverDocumentsComplete =>
       _driverDocs.isNotEmpty && _driverDocs.every((d) => d.status == DriverDocStatus.verified);
@@ -287,17 +321,75 @@ class AppState extends ChangeNotifier {
   }
 
   double get todayEarnings =>
+      _apiTodayEarnings ??
       driverTrips.where((t) => t.dateLabel == 'Today').fold(0.0, (s, t) => s + t.fare);
 
-  double get weekEarnings => driverTrips.fold(0.0, (s, t) => s + t.fare);
+  double get weekEarnings =>
+      _apiWeekEarnings ?? driverTrips.fold(0.0, (s, t) => s + t.fare);
 
   int get completedDriverTrips =>
-      driverTrips.where((t) => t.status == RideStatus.completed).length;
+      _apiCompletedTrips ?? driverTrips.where((t) => t.status == RideStatus.completed).length;
+
+  void replaceChatThreads(List<ChatThread> threads) {
+    _chatThreads
+      ..clear()
+      ..addAll(threads);
+    notifyListeners();
+  }
+
+  void replaceApiAlerts(List<String> lines) {
+    _apiAlerts
+      ..clear()
+      ..addAll(lines);
+    _alerts = _apiAlerts.length;
+    notifyListeners();
+  }
+
+  void setApiEarnings({required double today, required double week, required int trips}) {
+    _apiTodayEarnings = today;
+    _apiWeekEarnings = week;
+    _apiCompletedTrips = trips;
+    notifyListeners();
+  }
 
   String get fareEstimateLabel => '£${fareEstimate.toStringAsFixed(2)}';
 
-  /// Mock fare from vehicle + whether a full route is set.
+  /// Live fare from API estimate when available; otherwise local placeholder.
+  int? _apiFareEstimatePence;
+  int? _apiDistanceM;
+  String? _apiActiveRideId;
+  double? _pickupLat;
+  double? _pickupLng;
+  double? _dropLat;
+  double? _dropLng;
+  bool remoteRidesEnabled = true;
+
+  String? get apiActiveRideId => _apiActiveRideId;
+  double? get pickupLat => _pickupLat;
+  double? get pickupLng => _pickupLng;
+  double? get dropLat => _dropLat;
+  double? get dropLng => _dropLng;
+
+  void setRouteCoords({
+    double? pickupLat,
+    double? pickupLng,
+    double? dropLat,
+    double? dropLng,
+  }) {
+    _pickupLat = pickupLat ?? _pickupLat;
+    _pickupLng = pickupLng ?? _pickupLng;
+    _dropLat = dropLat ?? _dropLat;
+    _dropLng = dropLng ?? _dropLng;
+  }
+
+  void setApiEstimate({required int farePence, required int distanceM}) {
+    _apiFareEstimatePence = farePence;
+    _apiDistanceM = distanceM;
+    notifyListeners();
+  }
+
   double get fareEstimate {
+    if (_apiFareEstimatePence != null) return _apiFareEstimatePence! / 100.0;
     final hasRoute = _pickup.trim().isNotEmpty && _destination.trim().isNotEmpty;
     final base = switch (_vehicleCategory) {
       VehicleCategory.fourSeater => 17.70,
@@ -310,11 +402,20 @@ class AppState extends ChangeNotifier {
     return base;
   }
 
-  String get fareMilesLabel =>
-      (_pickup.isNotEmpty && _destination.isNotEmpty) ? '6 miles' : '— miles';
+  String get fareMilesLabel {
+    if (_apiDistanceM != null && _apiDistanceM! > 0) {
+      return '${(_apiDistanceM! / 1609.344).toStringAsFixed(1)} miles';
+    }
+    return (_pickup.isNotEmpty && _destination.isNotEmpty) ? '6 miles' : '— miles';
+  }
 
-  String get fareMinsLabel =>
-      (_pickup.isNotEmpty && _destination.isNotEmpty) ? '14 min' : '— min';
+  String get fareMinsLabel {
+    if (_apiDistanceM != null && _apiDistanceM! > 0) {
+      final mins = ((_apiDistanceM! / 1609.344) * 2.5).clamp(5, 90).round();
+      return '$mins min';
+    }
+    return (_pickup.isNotEmpty && _destination.isNotEmpty) ? '14 min' : '— min';
+  }
 
   bool get hasBookingRoute =>
       _pickup.trim().isNotEmpty && _destination.trim().isNotEmpty;
@@ -588,27 +689,34 @@ class AppState extends ChangeNotifier {
 
   void setPickup(String v) {
     _pickup = v;
+    _apiFareEstimatePence = null;
+    _apiDistanceM = null;
     notifyListeners();
   }
 
   void setDestination(String v) {
     _destination = v;
+    _apiFareEstimatePence = null;
+    _apiDistanceM = null;
     notifyListeners();
   }
 
   void setRideType(RideType t) {
     _rideType = t;
+    _apiFareEstimatePence = null;
     notifyListeners();
   }
 
   void setBookMode(BookMode mode) {
     _bookMode = mode;
     if (mode == BookMode.now) _scheduledAt = null;
+    _apiFareEstimatePence = null;
     notifyListeners();
   }
 
   void setVehicleCategory(VehicleCategory v) {
     _vehicleCategory = v;
+    _apiFareEstimatePence = null;
     notifyListeners();
   }
 
@@ -624,75 +732,208 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  void useCurrentLocation() {
-    _pickup = 'Riverside Park, Glenrothes, Fife';
+  Future<void> useCurrentLocation() async {
+    final here = await LocationService.currentLatLng();
+    if (here != null) {
+      _pickupLat = here.latitude;
+      _pickupLng = here.longitude;
+      _pickup =
+          'Current location · ${here.latitude.toStringAsFixed(5)}, ${here.longitude.toStringAsFixed(5)}';
+    } else {
+      _pickup = 'Riverside Park, Glenrothes, Fife';
+    }
     notifyListeners();
   }
 
+  /// Local/mock booking — used only when [remoteRidesEnabled] is false.
   String? confirmBooking() {
+    if (remoteRidesEnabled) {
+      return 'Use RideViewModel.bookRide() for API booking.';
+    }
     if (_pickup.trim().isEmpty) return 'Set a pickup location.';
     if (_destination.trim().isEmpty) return 'Set a destination.';
     if (_bookMode == BookMode.later && _scheduledAt == null) {
       return 'Pick a date & time for Book Later.';
     }
+    _beginLocalFinding();
+    return null;
+  }
+
+  void _beginLocalFinding() {
     _rideBooked = true;
     _driverMatched = false;
     _driversSeen = 0;
-    if (_bookMode == BookMode.now) {
+    _tracking = true;
+    _searching = true;
+    _selectedDriverId = null;
+    _ridePhase = PassengerRidePhase.finding;
+    notifyListeners();
+    // ignore: unawaited_futures
+    _runFindDriver();
+  }
+
+  /// Passenger: start finding after API `POST /rides`.
+  void beginApiRideFinding({
+    required String rideId,
+    required double farePounds,
+    required String pickup,
+    required String drop,
+    required double pickupLat,
+    required double pickupLng,
+    required double dropLat,
+    required double dropLng,
+  }) {
+    _apiActiveRideId = rideId;
+    _pickup = pickup;
+    _destination = drop;
+    _pickupLat = pickupLat;
+    _pickupLng = pickupLng;
+    _dropLat = dropLat;
+    _dropLng = dropLng;
+    _rideBooked = true;
+    _driverMatched = false;
+    _driversSeen = 0;
+    _tracking = true;
+    _searching = true;
+    _selectedDriverId = null;
+    _ridePhase = PassengerRidePhase.finding;
+    _pendingPassengerJobId = rideId;
+    notifyListeners();
+    // ignore: unawaited_futures
+    _runFindDriver();
+  }
+
+  /// Apply server ride status onto the live UI models.
+  void applyApiRide({
+    required String rideId,
+    required String status,
+    required String pickup,
+    required String drop,
+    required double farePounds,
+    required double pickupLat,
+    required double pickupLng,
+    required double dropLat,
+    required double dropLng,
+    String? driverName,
+    String? passengerName,
+    String? passengerPhone,
+    RideType type = RideType.standard,
+  }) {
+    _apiActiveRideId = rideId;
+    _pickup = pickup;
+    _destination = drop;
+    _pickupLat = pickupLat;
+    _pickupLng = pickupLng;
+    _dropLat = dropLat;
+    _dropLng = dropLng;
+
+    if (status == 'requested') {
+      _rideBooked = true;
       _tracking = true;
       _searching = true;
-      _selectedDriverId = null;
+      _driverMatched = false;
       _ridePhase = PassengerRidePhase.finding;
-      final jobId = 'job-p-${DateTime.now().millisecondsSinceEpoch}';
-      _pendingPassengerJobId = jobId;
-      final miles = 3.0 + _rng.nextDouble() * 8;
-      final job = IncomingRequest(
-        id: jobId,
-        passengerName: _user?.name ?? 'Passenger',
-        pickup: _pickup,
-        destination: _destination,
-        type: _rideType,
-        fare: fareEstimate,
+      notifyListeners();
+      return;
+    }
+
+    if (status == 'cancelled') {
+      cancelBooking();
+      _apiActiveRideId = null;
+      return;
+    }
+
+    final stage = switch (status) {
+      'assigned' => LiveRideStage.assigned,
+      'arrived' => LiveRideStage.arrivedPickup,
+      'in_progress' => LiveRideStage.inProgress,
+      'completed' => LiveRideStage.completed,
+      _ => null,
+    };
+    if (stage == null) {
+      notifyListeners();
+      return;
+    }
+
+    final miles = (_apiDistanceM != null) ? _apiDistanceM! / 1609.344 : 4.0;
+    final prev = _activeRide;
+    final progress = stage == LiveRideStage.arrivedPickup || stage == LiveRideStage.completed
+        ? 1.0
+        : (prev?.progress ?? 0);
+    _activeRide = ActiveRide(
+      id: rideId,
+      passengerName: passengerName ?? prev?.passengerName ?? _user?.name ?? 'Passenger',
+      passengerPhone: passengerPhone ?? prev?.passengerPhone ?? _user?.phone ?? '',
+      driverName: driverName ?? prev?.driverName ?? 'Driver',
+      vehicle: prev?.vehicle ?? _user?.vehicle ?? 'Vehicle',
+      plate: prev?.plate ?? _user?.vehiclePlate ?? '',
+      driverRating: prev?.driverRating ?? 4.9,
+      pickup: pickup,
+      destination: drop,
+      type: type,
+      fare: farePounds,
+      pickupLegMiles: miles.clamp(1.5, 12),
+      tripLegMiles: (miles * 1.3).clamp(2.0, 18),
+      pickupLat: pickupLat,
+      pickupLng: pickupLng,
+      dropLat: dropLat,
+      dropLng: dropLng,
+      driverLat: prev?.driverLat,
+      driverLng: prev?.driverLng,
+      stage: stage,
+      progress: progress,
+      liveRemainingMiles: prev?.liveRemainingMiles,
+    );
+
+    _rideBooked = true;
+    _tracking = true;
+    _searching = false;
+    _driverMatched = true;
+    _ridePhase = switch (status) {
+      'assigned' => PassengerRidePhase.approaching,
+      'arrived' => PassengerRidePhase.arrived,
+      'in_progress' => PassengerRidePhase.inProgress,
+      'completed' => PassengerRidePhase.rating,
+      _ => _ridePhase,
+    };
+
+    if (_activeTrip == null && isDriver) {
+      _activeTrip = IncomingRequest(
+        id: rideId,
+        passengerName: passengerName ?? 'Passenger',
+        pickup: pickup,
+        destination: drop,
+        type: type,
+        fare: farePounds,
         distance: '${miles.toStringAsFixed(1)} mi',
-        eta: '${4 + _rng.nextInt(8)} min',
-        passengerPhone: _user?.phone ?? '',
+        eta: '—',
+        passengerPhone: passengerPhone ?? '',
       );
-      // Push to driver offer queue (synced in this AppState).
-      _availableJobs
-        ..clear()
-        ..add(job);
-      if (_online == DriverOnlineStatus.offline && driverDocumentsComplete) {
-        _online = DriverOnlineStatus.online;
-      }
-      // ignore: unawaited_futures
-      _runFindDriver();
-    } else {
-      _tracking = false;
-      _searching = false;
-      _driverMatched = true;
-      _ridePhase = PassengerRidePhase.idle;
-      final when = _scheduledAt!;
-      final hh = when.hour.toString().padLeft(2, '0');
-      final mm = when.minute.toString().padLeft(2, '0');
-      final id = 's-${DateTime.now().millisecondsSinceEpoch}';
-      final record = RideRecord(
-        id: id,
-        pickup: _pickup,
-        destination: _destination,
-        type: RideType.scheduled,
-        status: RideStatus.assigned,
-        fare: fareEstimate,
-        dateLabel: '${when.day}/${when.month} $hh:$mm',
-        driverName: 'Pending assign',
-        passengerName: _user?.name ?? 'Passenger',
-        distance: fareMilesLabel,
-      );
-      _extraScheduled.insert(0, record);
-      _driverScheduled.insert(0, record);
-      _pushAlert('Scheduled ride confirmed for ${record.dateLabel}');
+      _online = DriverOnlineStatus.onTrip;
+      _availableJobs.clear();
+    }
+
+    if (stage == LiveRideStage.assigned || stage == LiveRideStage.inProgress) {
+      _startRideTicker();
+    }
+    if (status == 'completed') {
+      _stopRideTicker();
+      _online = isDriver ? DriverOnlineStatus.online : _online;
     }
     notifyListeners();
-    return null;
+  }
+
+  void setApiOffers(List<IncomingRequest> offers) {
+    if (_activeTrip != null || _activeRide != null) return;
+    _availableJobs
+      ..clear()
+      ..addAll(offers);
+    notifyListeners();
+  }
+
+  void clearApiOffers() {
+    _availableJobs.clear();
+    notifyListeners();
   }
 
   /// Radar while waiting for the assigned driver to accept.
@@ -905,7 +1146,10 @@ class AppState extends ChangeNotifier {
   }
 
   void _seedAvailableJobs() {
-    // Keep a live passenger booking at the front of the queue.
+    if (remoteRidesEnabled) {
+      // Offers come from RideViewModel polling `/drivers/me/offers`.
+      return;
+    }
     if (_pendingPassengerJobId != null) {
       final pending = _availableJobs.where((j) => j.id == _pendingPassengerJobId).toList();
       if (pending.isNotEmpty) {
@@ -915,7 +1159,6 @@ class AppState extends ChangeNotifier {
         return;
       }
     }
-    // Queue of offers for this driver only — UI shows one at a time.
     _availableJobs
       ..clear()
       ..addAll(_randomJobs(1));
@@ -927,7 +1170,7 @@ class AppState extends ChangeNotifier {
     if (_online == DriverOnlineStatus.offline) {
       _online = DriverOnlineStatus.online;
     }
-    if (_activeTrip == null && _availableJobs.isEmpty) {
+    if (!remoteRidesEnabled && _activeTrip == null && _availableJobs.isEmpty) {
       _seedAvailableJobs();
     }
     notifyListeners();
@@ -1248,6 +1491,7 @@ class AppState extends ChangeNotifier {
   void clearAlerts() {
     _alerts = 0;
     _liveAlerts.clear();
+    _apiAlerts.clear();
     notifyListeners();
   }
 

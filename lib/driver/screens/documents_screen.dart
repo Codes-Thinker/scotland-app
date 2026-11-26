@@ -4,111 +4,182 @@ import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/app_colors.dart';
+import '../../data/models/auth_models.dart';
 import '../../services/app_state.dart';
 import '../../shared/models/models.dart';
 import '../../shared/widgets/document_image_picker.dart';
+import '../../viewmodels/auth_view_model.dart';
 
-class DriverDocumentsScreen extends StatelessWidget {
+class DriverDocumentsScreen extends StatefulWidget {
   const DriverDocumentsScreen({super.key});
+
+  @override
+  State<DriverDocumentsScreen> createState() => _DriverDocumentsScreenState();
+}
+
+class _DriverDocumentsScreenState extends State<DriverDocumentsScreen> {
+  List<DriverDocumentDto>? _remote;
+  bool _loading = true;
+  String? _error;
+  String? _uploading;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final docs = await context.read<AuthViewModel>().fetchDocuments();
+      if (!mounted) return;
+      setState(() {
+        _remote = docs;
+        _loading = false;
+      });
+      final allVerified = docs.isNotEmpty && docs.every((d) => d.status == 'verified');
+      if (allVerified) {
+        for (final d in docs) {
+          // ignore: unawaited_futures
+          context.read<AppState>().uploadDriverDocument(d.type);
+        }
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = e.toString();
+        _remote = null;
+      });
+    }
+  }
+
+  Future<void> _upload(DriverDocumentDto doc) async {
+    final path = await pickDocumentImage(context, title: 'Upload ${_title(doc.type)}');
+    if (!mounted || path == null) return;
+    setState(() => _uploading = doc.type);
+    final err = await context.read<AuthViewModel>().uploadDocument(
+          type: doc.type,
+          filePath: path,
+        );
+    if (!mounted) return;
+    setState(() => _uploading = null);
+    if (err != null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err)));
+      return;
+    }
+    await context.read<AppState>().uploadDriverDocument(doc.type);
+    await _load();
+  }
+
+  String _title(String type) {
+    switch (type) {
+      case 'licence':
+        return "Driver's Licence";
+      case 'council_licence':
+        return 'Council License';
+      case 'council_plate':
+        return 'Council Vehicle Plate Number';
+      case 'insurance':
+        return 'Car Insurance Document';
+      case 'v5c':
+        return 'Vehicle Registration Document';
+      default:
+        return type;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
-    final docs = state.driverDocuments;
     final complete = state.driverDocumentsComplete;
-    final missing = state.driverDocumentsMissing;
+    final docs = _remote;
 
     return SafeArea(
       bottom: false,
-      child: ListView(
-        padding: const EdgeInsets.fromLTRB(20, 12, 20, 110),
-        children: [
-          const Text(
-            'Required documents',
-            style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800, letterSpacing: -0.4),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            complete
-                ? 'All documents verified — you can go online.'
-                : 'Upload all $missing remaining document${missing == 1 ? '' : 's'} before going online.',
-            style: const TextStyle(color: PassengerPalette.muted, height: 1.35),
-          ),
-          const SizedBox(height: 14),
-          Container(
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: complete ? const Color(0xFFDCFCE7) : const Color(0xFFFFF7ED),
-              borderRadius: BorderRadius.circular(14),
+      child: RefreshIndicator(
+        onRefresh: _load,
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(20, 12, 20, 110),
+          children: [
+            const Text(
+              'Required documents',
+              style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800, letterSpacing: -0.4),
             ),
-            child: Row(
-              children: [
-                Icon(
-                  complete ? CupertinoIcons.checkmark_seal_fill : CupertinoIcons.doc_text,
-                  color: complete ? AppPalette.success : AppPalette.warning,
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    complete
-                        ? 'Account ready for jobs'
-                        : 'Driver account requires documents',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w700,
-                      color: complete ? AppPalette.success : const Color(0xFF9A3412),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          if (state.user?.vehicle != null ||
-              state.user?.vehiclePlate != null ||
-              state.user?.operatingZone != null) ...[
-            const SizedBox(height: 14),
+            const SizedBox(height: 6),
             Text(
-              [
-                if (state.user?.vehicle != null) 'Vehicle: ${state.user!.vehicle}',
-                if (state.user?.vehiclePlate != null) 'Plate: ${state.user!.vehiclePlate}',
-                if (state.user?.operatingZone != null) 'Zone: ${state.user!.operatingZone}',
-              ].join(' · '),
-              style: const TextStyle(fontSize: 13, color: PassengerPalette.muted, fontWeight: FontWeight.w500),
+              complete
+                  ? 'All documents verified — you can go online.'
+                  : 'Upload documents now. Admin verification is required before going online.',
+              style: const TextStyle(color: PassengerPalette.muted, height: 1.35),
             ),
-          ],
-          const SizedBox(height: 18),
-          ...docs.map((d) => _DocTile(doc: d)),
-          if (complete) ...[
-            const SizedBox(height: 12),
-            SizedBox(
-              height: 50,
-              child: FilledButton(
-                onPressed: () => context.go('/driver'),
-                style: FilledButton.styleFrom(
-                  backgroundColor: PassengerPalette.limeDeep,
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            const SizedBox(height: 14),
+            if (_loading)
+              const Padding(
+                padding: EdgeInsets.all(24),
+                child: Center(child: CircularProgressIndicator()),
+              )
+            else if (_error != null) ...[
+              Text(_error!, style: const TextStyle(color: AppPalette.danger)),
+              TextButton(onPressed: _load, child: const Text('Retry')),
+              const SizedBox(height: 12),
+              // Offline / API down fallback to local list
+              ...state.driverDocuments.map((d) => _LocalDocTile(doc: d)),
+            ] else if (docs != null)
+              ...docs.map(
+                (d) => _ApiDocTile(
+                  doc: d,
+                  title: _title(d.type),
+                  uploading: _uploading == d.type,
+                  onUpload: () => _upload(d),
                 ),
-                child: const Text('Go to jobs', style: TextStyle(fontWeight: FontWeight.w800)),
               ),
-            ),
+            if (complete) ...[
+              const SizedBox(height: 12),
+              SizedBox(
+                height: 50,
+                child: FilledButton(
+                  onPressed: () => context.go('/driver'),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: PassengerPalette.limeDeep,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                  ),
+                  child: const Text('Go to jobs', style: TextStyle(fontWeight: FontWeight.w800)),
+                ),
+              ),
+            ],
           ],
-        ],
+        ),
       ),
     );
   }
 }
 
-class _DocTile extends StatelessWidget {
-  final DriverDocument doc;
-  const _DocTile({required this.doc});
+class _ApiDocTile extends StatelessWidget {
+  final DriverDocumentDto doc;
+  final String title;
+  final bool uploading;
+  final VoidCallback onUpload;
+
+  const _ApiDocTile({
+    required this.doc,
+    required this.title,
+    required this.uploading,
+    required this.onUpload,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final state = context.read<AppState>();
     final (color, label, icon) = switch (doc.status) {
-      DriverDocStatus.verified => (AppPalette.success, 'Verified', CupertinoIcons.checkmark_circle_fill),
-      DriverDocStatus.pending => (AppPalette.warning, 'Checking…', CupertinoIcons.time),
-      DriverDocStatus.missing => (PassengerPalette.muted, 'Required', CupertinoIcons.cloud_upload),
+      'verified' => (AppPalette.success, 'Verified', CupertinoIcons.checkmark_circle_fill),
+      'pending' => (AppPalette.warning, 'Pending review', CupertinoIcons.time),
+      'expired' => (AppPalette.danger, 'Expired', CupertinoIcons.exclamationmark_circle),
+      _ => (PassengerPalette.muted, 'Required', CupertinoIcons.cloud_upload),
     };
 
     return Container(
@@ -126,14 +197,14 @@ class _DocTile extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(doc.title, style: const TextStyle(fontWeight: FontWeight.w700)),
-                Text(doc.hint, style: const TextStyle(fontSize: 12, color: PassengerPalette.muted)),
+                Text(title, style: const TextStyle(fontWeight: FontWeight.w700)),
+                Text(label, style: TextStyle(fontSize: 12, color: color, fontWeight: FontWeight.w600)),
               ],
             ),
           ),
-          if (doc.status == DriverDocStatus.verified)
+          if (doc.status == 'verified')
             Text(label, style: TextStyle(color: color, fontWeight: FontWeight.w700, fontSize: 12))
-          else if (doc.status == DriverDocStatus.pending)
+          else if (uploading || doc.status == 'pending')
             const SizedBox(
               width: 18,
               height: 18,
@@ -141,11 +212,7 @@ class _DocTile extends StatelessWidget {
             )
           else
             TextButton(
-              onPressed: () async {
-                final path = await pickDocumentImage(context, title: 'Upload ${doc.title}');
-                if (path == null) return;
-                await state.uploadDriverDocument(doc.id);
-              },
+              onPressed: onUpload,
               style: TextButton.styleFrom(
                 foregroundColor: PassengerPalette.limeDeep,
                 padding: const EdgeInsets.symmetric(horizontal: 8),
@@ -154,6 +221,24 @@ class _DocTile extends StatelessWidget {
             ),
         ],
       ),
+    );
+  }
+}
+
+class _LocalDocTile extends StatelessWidget {
+  final DriverDocument doc;
+  const _LocalDocTile({required this.doc});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF7F8FA),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Text(doc.title, style: const TextStyle(fontWeight: FontWeight.w700)),
     );
   }
 }

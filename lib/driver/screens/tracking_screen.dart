@@ -7,6 +7,8 @@ import '../../core/app_colors.dart';
 import '../../services/app_state.dart';
 import '../../shared/models/models.dart';
 import '../../shared/widgets/live_ride_map.dart';
+import '../../viewmodels/chat_view_model.dart';
+import '../../viewmodels/ride_view_model.dart';
 
 /// Driver post-accept lifecycle: on the way → arrived → start → navigate → complete.
 class DriverTrackingScreen extends StatelessWidget {
@@ -97,14 +99,11 @@ class DriverTrackingScreen extends StatelessWidget {
                       _GlassIcon(
                         icon: CupertinoIcons.chat_bubble_2,
                         onTap: () {
-                          final threads = state.chatThreads.where(
-                            (t) => t.passengerName == ride.passengerName || t.rideId == ride.id,
+                          context.read<ChatViewModel>().ensureThreadShell(
+                            ride.id,
+                            peerName: ride.passengerName,
                           );
-                          if (threads.isNotEmpty) {
-                            context.push('/driver/chat/${threads.first.id}');
-                          } else {
-                            context.go('/driver/messages');
-                          }
+                          context.push('/driver/chat/${ride.id}');
                         },
                       ),
                     ],
@@ -213,8 +212,13 @@ class DriverTrackingScreen extends StatelessWidget {
                       height: 54,
                       child: FilledButton(
                         onPressed: nearPickup
-                            ? () {
-                                state.markArrivedAtPickup();
+                            ? () async {
+                                final err = await context.read<RideViewModel>().markArrived();
+                                if (!context.mounted) return;
+                                if (err != null) {
+                                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err)));
+                                  return;
+                                }
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   const SnackBar(
                                     content: Text('Passenger notified — you have arrived'),
@@ -261,8 +265,13 @@ class DriverTrackingScreen extends StatelessWidget {
                       width: double.infinity,
                       height: 54,
                       child: FilledButton(
-                        onPressed: () {
-                          state.startActiveRide();
+                        onPressed: () async {
+                          final err = await context.read<RideViewModel>().startTrip();
+                          if (!context.mounted) return;
+                          if (err != null) {
+                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err)));
+                            return;
+                          }
                           ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(content: Text('Ride started — navigate to destination')),
                           );
@@ -284,8 +293,13 @@ class DriverTrackingScreen extends StatelessWidget {
                       height: 54,
                       child: FilledButton(
                         onPressed: ride.progress >= 0.75
-                            ? () {
-                                state.completeActiveRide();
+                            ? () async {
+                                final err = await context.read<RideViewModel>().completeTrip();
+                                if (!context.mounted) return;
+                                if (err != null) {
+                                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err)));
+                                  return;
+                                }
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   const SnackBar(content: Text('Ride completed — saved to history')),
                                 );

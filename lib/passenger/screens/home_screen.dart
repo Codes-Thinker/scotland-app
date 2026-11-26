@@ -8,6 +8,7 @@ import '../../services/app_state.dart';
 import '../../services/mock_repository.dart';
 import '../../shared/models/models.dart';
 import '../../shared/widgets/map_placeholder.dart';
+import '../../viewmodels/ride_view_model.dart';
 import 'location_picker_screen.dart';
 
 /// Passenger Book — Book Now / Later, route map, vehicles, fare (live FNT flow).
@@ -236,10 +237,16 @@ class _PassengerHomeScreenState extends State<PassengerHomeScreen> {
         state.setStop(result);
         setState(() => _showStop = true);
     }
+    if (state.hasBookingRoute) {
+      // ignore: unawaited_futures
+      context.read<RideViewModel>().refreshEstimate();
+    }
   }
 
-  void _confirm(AppState state) {
-    final err = state.confirmBooking();
+  Future<void> _confirm(AppState state) async {
+    final rides = context.read<RideViewModel>();
+    final err = await rides.bookRide();
+    if (!mounted) return;
     if (err != null) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err)));
       return;

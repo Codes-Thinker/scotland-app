@@ -8,6 +8,7 @@ import 'package:provider/provider.dart';
 import '../core/app_colors.dart';
 import '../services/app_state.dart';
 import '../shared/widgets/brand_logo.dart';
+import '../viewmodels/auth_view_model.dart';
 
 /// Full-bleed map splash — car drives & rotates on open map (no card / no GIF).
 class SplashScreen extends StatefulWidget {
@@ -44,10 +45,10 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
     _navigated = true;
     await Future<void>.delayed(const Duration(milliseconds: 220));
     if (!mounted) return;
+    final auth = context.read<AuthViewModel>();
     final state = context.read<AppState>();
-    // After splash: home if session exists, otherwise login.
-    if (state.isLoggedIn) {
-      if (state.isPassenger) {
+    if (auth.isLoggedIn) {
+      if (auth.isPassengerMode) {
         context.go('/passenger');
       } else {
         context.go(state.driverDocumentsComplete ? '/driver' : '/driver/documents');

@@ -5,17 +5,17 @@ import 'package:provider/provider.dart';
 
 import '../core/app_colors.dart';
 import '../core/auth_theme.dart';
-import '../services/app_state.dart';
 import '../shared/models/models.dart';
 import '../shared/widgets/brand_logo.dart';
+import '../viewmodels/auth_view_model.dart';
 
-/// Sign In / Sign Up choice for the selected role (after welcome).
 class AuthChoiceScreen extends StatelessWidget {
   const AuthChoiceScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
-    final role = context.watch<AppState>().pendingRole ?? UserRole.passenger;
+    final auth = context.watch<AuthViewModel>();
+    final role = auth.pendingRole;
     final isDriver = role == UserRole.driver;
     final roleLabel = isDriver ? 'Driver' : 'Passenger';
     final signupPath = isDriver ? '/auth/signup/driver' : '/auth/signup/passenger';
@@ -68,7 +68,7 @@ class AuthChoiceScreen extends StatelessWidget {
                     height: 54,
                     child: FilledButton(
                       onPressed: () {
-                        context.read<AppState>().selectRole(role);
+                        auth.selectRole(role);
                         context.go('/auth/signin');
                       },
                       style: AuthTheme.primaryButton(),
@@ -84,7 +84,7 @@ class AuthChoiceScreen extends StatelessWidget {
                     height: 54,
                     child: OutlinedButton(
                       onPressed: () {
-                        context.read<AppState>().selectRole(role);
+                        auth.selectRole(role);
                         context.go(signupPath);
                       },
                       style: OutlinedButton.styleFrom(
@@ -92,9 +92,9 @@ class AuthChoiceScreen extends StatelessWidget {
                         side: const BorderSide(color: AuthTheme.gold, width: 1.5),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                       ),
-                      child: Text(
-                        isDriver ? 'Sign Up' : 'Sign Up',
-                        style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
+                      child: const Text(
+                        'Sign Up',
+                        style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
                       ),
                     ),
                   ),

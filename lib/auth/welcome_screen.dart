@@ -4,9 +4,9 @@ import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
 import '../core/app_colors.dart';
-import '../services/app_state.dart';
 import '../shared/models/models.dart';
 import '../shared/widgets/brand_logo.dart';
+import '../viewmodels/auth_view_model.dart';
 
 /// Light welcome — select Passenger/Driver, then Sign In.
 class WelcomeScreen extends StatelessWidget {
@@ -16,8 +16,8 @@ class WelcomeScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final state = context.watch<AppState>();
-    final selected = state.pendingRole ?? UserRole.passenger;
+    final auth = context.watch<AuthViewModel>();
+    final selected = auth.pendingRole;
     final h = MediaQuery.sizeOf(context).height;
 
     return Scaffold(
@@ -62,7 +62,7 @@ class WelcomeScreen extends StatelessWidget {
                           title: 'Passenger',
                           subtitle: 'Book rides',
                           selected: selected == UserRole.passenger,
-                          onTap: () => state.selectRole(UserRole.passenger),
+                          onTap: () => auth.selectRole(UserRole.passenger),
                         ),
                       ),
                       const SizedBox(width: 14),
@@ -72,7 +72,7 @@ class WelcomeScreen extends StatelessWidget {
                           title: 'Driver',
                           subtitle: 'Drive & earn',
                           selected: selected == UserRole.driver,
-                          onTap: () => state.selectRole(UserRole.driver),
+                          onTap: () => auth.selectRole(UserRole.driver),
                         ),
                       ),
                     ],
@@ -83,8 +83,7 @@ class WelcomeScreen extends StatelessWidget {
                     height: 54,
                     child: FilledButton(
                       onPressed: () {
-                        state.selectRole(selected);
-                        // Role selected → Sign In / Sign Up choice (welcome UI unchanged).
+                        auth.selectRole(selected);
                         context.go('/auth/choice');
                       },
                       style: FilledButton.styleFrom(
@@ -101,7 +100,7 @@ class WelcomeScreen extends StatelessWidget {
                   const SizedBox(height: 4),
                   TextButton(
                     onPressed: () {
-                      state.selectRole(selected);
+                      auth.selectRole(selected);
                       context.go('/auth/signin');
                     },
                     child: const Text(

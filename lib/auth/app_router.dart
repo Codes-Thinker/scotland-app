@@ -23,13 +23,14 @@ import '../passenger/screens/tracking_screen.dart';
 import '../passenger/screens/trips_screen.dart';
 import '../services/app_state.dart';
 import '../shared/models/models.dart';
+import '../viewmodels/auth_view_model.dart';
 import 'auth_choice_screen.dart';
 import 'auth_sign_in_screen.dart';
 import 'auth_signup_screen.dart';
 import 'splash_screen.dart';
 import 'welcome_screen.dart';
 
-GoRouter createRouter(AppState appState) {
+GoRouter createRouter(AppState appState, AuthViewModel auth) {
   final authRoutes = {
     '/splash',
     '/auth/welcome',
@@ -40,16 +41,14 @@ GoRouter createRouter(AppState appState) {
     '/auth/signup/driver',
   };
 
-  // Always open animated splash first; SplashScreen routes after the animation.
   return GoRouter(
     initialLocation: '/splash',
-    refreshListenable: appState,
+    refreshListenable: Listenable.merge([auth, appState]),
     redirect: (context, state) {
-      final loggedIn = appState.isLoggedIn;
+      final loggedIn = auth.isLoggedIn;
       final loc = state.matchedLocation;
       final onAuth = authRoutes.contains(loc) || loc == '/' || loc.startsWith('/auth/signup');
 
-      // Let the splash animation finish — do not redirect away from /splash.
       if (loc == '/splash') return null;
 
       if (!loggedIn && !onAuth) return '/auth/welcome';
@@ -61,27 +60,28 @@ GoRouter createRouter(AppState appState) {
               loc == '/auth/signin' ||
               loc == '/auth/login' ||
               loc.startsWith('/auth/signup'))) {
-        if (appState.isPassenger) return '/passenger';
+        if (auth.isPassengerMode) return '/passenger';
         return appState.driverDocumentsComplete ? '/driver' : '/driver/documents';
       }
-      if (loggedIn && appState.isPassenger && loc.startsWith('/driver')) return '/passenger';
-      if (loggedIn && appState.isDriver && loc.startsWith('/passenger')) return '/driver';
+      if (loggedIn && auth.isPassengerMode && loc.startsWith('/driver')) return '/passenger';
+      if (loggedIn && auth.isDriverMode && loc.startsWith('/passenger')) {
+        return appState.driverDocumentsComplete ? '/driver' : '/driver/documents';
+      }
       if (loggedIn &&
-          appState.isDriver &&
+          auth.isDriverMode &&
           !appState.driverDocumentsComplete &&
           loc.startsWith('/driver') &&
           loc != '/driver/documents' &&
           loc != '/driver/profile') {
         return '/driver/documents';
       }
-      // Block stale tracking screens after cancel / completion cleanup.
-      if (loggedIn && appState.isPassenger && loc == '/passenger/tracking') {
+      if (loggedIn && auth.isPassengerMode && loc == '/passenger/tracking') {
         final phase = appState.ridePhase;
         if (phase == PassengerRidePhase.idle && !appState.tracking) {
           return '/passenger';
         }
       }
-      if (loggedIn && appState.isDriver && loc == '/driver/tracking') {
+      if (loggedIn && auth.isDriverMode && loc == '/driver/tracking') {
         if (appState.activeRide == null && appState.activeTrip == null) {
           return '/driver';
         }
@@ -106,7 +106,7 @@ GoRouter createRouter(AppState appState) {
       GoRoute(
         path: '/auth/signup',
         redirect: (context, state) =>
-            appState.pendingRole == UserRole.driver
+            auth.pendingRole == UserRole.driver
                 ? '/auth/signup/driver'
                 : '/auth/signup/passenger',
       ),
@@ -118,35 +118,45 @@ GoRouter createRouter(AppState appState) {
           GoRoute(path: '/passenger/trips', builder: (context, state) => const PassengerTripsScreen()),
           GoRoute(path: '/passenger/alerts', builder: (context, state) => const PassengerAlertsScreen()),
           GoRoute(path: '/passenger/support', builder: (context, state) => const PassengerSupportScreen()),
-          GoRoute(path: '/passenger/payments', builder: (context, state) => const PassengerPaymentsScreen()),
           GoRoute(path: '/passenger/profile', builder: (context, state) => const PassengerProfileScreen()),
+          GoRoute(path: '/passenger/payments', builder: (context, state) => const PassengerPaymentsScreen()),
           GoRoute(path: '/passenger/tracking', builder: (context, state) => const PassengerTrackingScreen()),
+          GoRoute(
+            path: '/passenger/chat/:id',
+            builder: (context, state) => DriverChatThreadScreen(threadId: state.pathParameters['id']!),
+          ),
         ],
       ),
       ShellRoute(
         builder: (context, state, child) => DriverShell(child: child),
         routes: [
           GoRoute(path: '/driver', builder: (context, state) => const DriverJobsScreen()),
-          GoRoute(path: '/driver/tracking', builder: (context, state) => const DriverTrackingScreen()),
-          GoRoute(path: '/driver/history', builder: (context, state) => const DriverHistoryScreen()),
-          GoRoute(path: '/driver/scheduled', builder: (context, state) => const DriverScheduledScreen()),
           GoRoute(path: '/driver/messages', builder: (context, state) => const DriverMessagesScreen()),
+          GoRoute(path: '/driver/history', builder: (context, state) => const DriverHistoryScreen()),
+          GoRoute(path: '/driver/earnings', builder: (context, state) => const DriverEarningsScreen()),
+          GoRoute(path: '/driver/profile', builder: (context, state) => const DriverProfileScreen()),
+          GoRoute(path: '/driver/documents', builder: (context, state) => const DriverDocumentsScreen()),
+          GoRoute(path: '/driver/alerts', builder: (context, state) => const DriverAlertsScreen()),
+          GoRoute(path: '/driver/scheduled', builder: (context, state) => const DriverScheduledScreen()),
+          GoRoute(path: '/driver/tracking', builder: (context, state) => const DriverTrackingScreen()),
           GoRoute(
             path: '/driver/chat/:id',
             builder: (context, state) => DriverChatThreadScreen(threadId: state.pathParameters['id']!),
           ),
-          GoRoute(path: '/driver/earnings', builder: (context, state) => const DriverEarningsScreen()),
-          GoRoute(path: '/driver/alerts', builder: (context, state) => const DriverAlertsScreen()),
-          GoRoute(path: '/driver/documents', builder: (context, state) => const DriverDocumentsScreen()),
-          GoRoute(path: '/driver/profile', builder: (context, state) => const DriverProfileScreen()),
         ],
       ),
     ],
     errorBuilder: (context, state) => Scaffold(
       body: Center(
-        child: FilledButton(
-          onPressed: () => context.go(appState.isLoggedIn ? '/passenger' : '/auth/welcome'),
-          child: Text(appState.isLoggedIn ? 'Go home' : 'Back to login'),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('Route error: ${state.error}'),
+            TextButton(
+              onPressed: () => context.go(auth.isLoggedIn ? '/passenger' : '/auth/welcome'),
+              child: const Text('Go home'),
+            ),
+          ],
         ),
       ),
     ),

@@ -9,6 +9,7 @@ import '../services/app_state.dart';
 import '../shared/models/models.dart';
 import '../shared/widgets/brand_logo.dart';
 import '../shared/widgets/document_image_picker.dart';
+import '../viewmodels/auth_view_model.dart';
 
 class AuthSignupScreen extends StatefulWidget {
   final UserRole role;
@@ -43,7 +44,7 @@ class _AuthSignupScreenState extends State<AuthSignupScreen> {
     _docs = AppState.requiredDriverDocs.map((d) => d.copyWith()).toList();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      context.read<AppState>().selectRole(widget.role);
+      context.read<AuthViewModel>().selectRole(widget.role);
     });
   }
 
@@ -98,40 +99,53 @@ class _AuthSignupScreenState extends State<AuthSignupScreen> {
   }
 
   Future<void> _submit() async {
-    final state = context.read<AppState>();
-    state.selectRole(widget.role);
+    final auth = context.read<AuthViewModel>();
+    auth.selectRole(widget.role);
     setState(() {
       _loading = true;
       _error = null;
     });
-    await Future<void>.delayed(const Duration(milliseconds: 400));
 
-    final vehicleValue = _isPassenger
-        ? ''
-        : '${_vehicle.text.trim()} · ${_vehicleLabel(_vehicleCategory)}';
+    final String? err;
+    if (_isPassenger) {
+      err = await auth.registerPassenger(
+        name: _name.text,
+        email: _email.text,
+        phone: _phone.text,
+        password: _password.text,
+        confirmPassword: _confirm.text,
+      );
+    } else {
+      err = await auth.registerDriver(
+        name: _name.text,
+        email: _email.text,
+        phone: _phone.text,
+        password: _password.text,
+        confirmPassword: _confirm.text,
+        vehicleMakeModel: _vehicle.text.trim().isEmpty
+            ? _vehicleLabel(_vehicleCategory)
+            : _vehicle.text,
+        vehiclePlate: _plate.text,
+        operatingZone: _operatingZone ?? '',
+      );
+    }
 
-    final err = await state.signUp(
-      name: _name.text,
-      email: _email.text,
-      phone: _phone.text,
-      password: _password.text,
-      confirmPassword: _confirm.text,
-      vehicle: vehicleValue,
-      vehiclePlate: _plate.text,
-      operatingZone: _operatingZone ?? '',
-      initialDriverDocs: _isPassenger ? null : _docs,
-      acceptedTerms: true,
-    );
     if (!mounted) return;
     setState(() {
       _loading = false;
       _error = err;
     });
     if (err == null) {
-      final role = widget.role;
-      await state.logout();
-      if (!mounted) return;
-      state.selectRole(role);
+      auth.selectRole(widget.role);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            _isPassenger
+                ? 'Account created. Please sign in.'
+                : 'Application submitted. Please sign in.',
+          ),
+        ),
+      );
       context.go('/auth/signin');
     }
   }
@@ -278,7 +292,7 @@ class _AuthSignupScreenState extends State<AuthSignupScreen> {
                 const SizedBox(height: 8),
                 TextButton(
                   onPressed: () {
-                    context.read<AppState>().selectRole(widget.role);
+                    context.read<AuthViewModel>().selectRole(widget.role);
                     context.go('/auth/signin');
                   },
                   child: const Text(

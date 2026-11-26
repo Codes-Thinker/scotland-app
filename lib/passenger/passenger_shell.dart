@@ -26,7 +26,7 @@ class PassengerShell extends StatelessWidget {
   Widget build(BuildContext context) {
     final loc = GoRouterState.of(context).uri.toString();
     final i = _index(loc);
-    final hideNav = loc.contains('/tracking');
+    final hideNav = loc.contains('/tracking') || loc.contains('/chat/');
     final state = context.watch<AppState>();
     final name = state.user?.name ?? '';
     final alertCount = state.passengerAlerts.length;

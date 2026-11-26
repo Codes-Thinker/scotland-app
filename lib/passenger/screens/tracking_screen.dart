@@ -10,6 +10,8 @@ import '../../services/app_state.dart';
 import '../../shared/models/models.dart';
 import '../../shared/widgets/confirm_actions.dart';
 import '../../shared/widgets/live_ride_map.dart';
+import '../../viewmodels/chat_view_model.dart';
+import '../../viewmodels/ride_view_model.dart';
 
 /// Finding → Driver approaching → Arrived → In progress → Rate.
 class PassengerTrackingScreen extends StatefulWidget {
@@ -118,6 +120,19 @@ class _PassengerTrackingScreenState extends State<PassengerTrackingScreen>
                           ),
                         ),
                       ),
+                      if (ride != null && showLiveMap) ...[
+                        const SizedBox(width: 10),
+                        _GlassIcon(
+                          icon: CupertinoIcons.chat_bubble_2,
+                          onTap: () {
+                            context.read<ChatViewModel>().ensureThreadShell(
+                              ride.id,
+                              peerName: ride.driverName,
+                            );
+                            context.push('/passenger/chat/${ride.id}');
+                          },
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -154,8 +169,9 @@ class _PassengerTrackingScreenState extends State<PassengerTrackingScreen>
                 PassengerRidePhase.rating => _RatingSheet(
                     rating: _rating,
                     onChanged: (v) => setState(() => _rating = v),
-                    onSubmit: () {
-                      state.completePassengerRide(_rating);
+                    onSubmit: () async {
+                      await context.read<RideViewModel>().rateActiveRide(_rating);
+                      if (!context.mounted) return;
                       context.go('/passenger/trips');
                     },
                     fare: ride?.fare ?? state.fareEstimate,

@@ -3,15 +3,30 @@ import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/app_colors.dart';
-import '../../services/app_state.dart';
 import '../../shared/widgets/confirm_bottom_sheet.dart';
+import '../../viewmodels/alerts_view_model.dart';
 
-class DriverAlertsScreen extends StatelessWidget {
+class DriverAlertsScreen extends StatefulWidget {
   const DriverAlertsScreen({super.key});
 
   @override
+  State<DriverAlertsScreen> createState() => _DriverAlertsScreenState();
+}
+
+class _DriverAlertsScreenState extends State<DriverAlertsScreen> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      context.read<AlertsViewModel>().refresh();
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final state = context.watch<AppState>();
+    final vm = context.watch<AlertsViewModel>();
+    final alerts = vm.alerts;
+
     return Scaffold(
       backgroundColor: Colors.white,
       body: SafeArea(
@@ -34,20 +49,20 @@ class DriverAlertsScreen extends StatelessWidget {
                 const Expanded(
                   child: Text('Alerts', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
                 ),
-                if (state.alertItems.isNotEmpty)
+                if (alerts.isNotEmpty)
                   TextButton(
                     onPressed: () async {
                       final ok = await showConfirmBottomSheet(
                         context,
-                        title: 'Clear alerts?',
-                        message: 'Remove all alert notifications from this list?',
+                        title: 'Mark all read?',
+                        message: 'Clear unread badges on all alerts?',
                         cancelLabel: 'Keep',
-                        confirmLabel: 'Clear all',
-                        onConfirm: () async => state.clearAlerts(),
+                        confirmLabel: 'Mark read',
+                        onConfirm: () async => vm.markAllRead(),
                       );
                       if (ok && context.mounted) {
                         ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Alerts cleared')),
+                          const SnackBar(content: Text('Alerts marked read')),
                         );
                       }
                     },
@@ -56,27 +71,45 @@ class DriverAlertsScreen extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 8),
-            if (state.alertItems.isEmpty)
-              const Padding(
-                padding: EdgeInsets.only(top: 40),
+            if (alerts.isEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 40),
                 child: Center(
-                  child: Text('No alerts', style: TextStyle(color: PassengerPalette.muted)),
+                  child: Text(
+                    vm.error ?? 'No alerts',
+                    style: const TextStyle(color: PassengerPalette.muted),
+                  ),
                 ),
               )
             else
-              ...state.alertItems.map(
+              ...alerts.map(
                 (a) => Container(
                   margin: const EdgeInsets.only(bottom: 8),
                   padding: const EdgeInsets.all(14),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFF7F8FA),
+                    color: a.isUnread ? const Color(0xFFFFF8E7) : const Color(0xFFF7F8FA),
                     borderRadius: BorderRadius.circular(14),
                   ),
                   child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Icon(Icons.notification_important, color: AppPalette.warning),
+                      Icon(
+                        Icons.notification_important,
+                        color: a.isUnread ? AppPalette.warning : PassengerPalette.muted,
+                      ),
                       const SizedBox(width: 10),
-                      Expanded(child: Text(a)),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(a.title, style: const TextStyle(fontWeight: FontWeight.w700)),
+                            if (a.body.trim().isNotEmpty) ...[
+                              const SizedBox(height: 4),
+                              Text(a.body),
+                            ],
+                          ],
+                        ),
+                      ),
                     ],
                   ),
                 ),

@@ -3,6 +3,8 @@ import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
 import '../../services/app_state.dart';
+import '../../viewmodels/auth_view_model.dart';
+import '../../viewmodels/ride_view_model.dart';
 import 'confirm_bottom_sheet.dart';
 
 Future<void> confirmLogout(BuildContext context) async {
@@ -12,7 +14,12 @@ Future<void> confirmLogout(BuildContext context) async {
     message: 'Are you sure you want to log out of your account?',
     cancelLabel: 'Stay Logged In',
     confirmLabel: 'Logout',
-    onConfirm: () => context.read<AppState>().logout(),
+    onConfirm: () async {
+      final auth = context.read<AuthViewModel>();
+      final app = context.read<AppState>();
+      await auth.logout();
+      await app.clearApiSession();
+    },
   );
   if (ok && context.mounted) {
     context.go('/auth/welcome');
@@ -27,16 +34,21 @@ Future<void> confirmDeleteAccount(BuildContext context) async {
     context,
     title: 'Delete Account?',
     message:
-        'This permanently removes your local account data and signs you out. '
-        'You will need to create a new account to use the app again. This cannot be undone.',
+        'This signs you out and clears local session data. '
+        'Contact support to permanently delete your account on the server.',
     cancelLabel: 'Keep Account',
-    confirmLabel: 'Delete Account',
-    onConfirm: () => context.read<AppState>().deleteAccount(),
+    confirmLabel: 'Sign Out',
+    onConfirm: () async {
+      final auth = context.read<AuthViewModel>();
+      final app = context.read<AppState>();
+      await auth.logout();
+      await app.clearApiSession();
+    },
   );
   if (ok && context.mounted) {
     context.go('/auth/welcome');
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Account deleted')),
+      const SnackBar(content: Text('Signed out')),
     );
   }
 }
@@ -49,7 +61,8 @@ Future<bool> confirmCancelRide(BuildContext context) async {
     cancelLabel: 'Keep Ride',
     confirmLabel: 'Yes, Cancel Ride',
     onConfirm: () async {
-      context.read<AppState>().cancelBooking();
+      final rides = context.read<RideViewModel>();
+      await rides.cancelActiveRide(reason: 'Cancelled by passenger');
     },
   );
   if (ok && context.mounted) {
